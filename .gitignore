@@ -1,0 +1,28 @@
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Checkpoints and models (except the one in my_agent)
+ckpts/
+
+# Temporary and submission files
+submission/
+submission.zip
+temp_submission/
+test_unzip/
+test_verify/
+
+# Environments and credentials
+.env
+venv/
+.venv/
+ENV/
+secrets/
+*.json
+
+# IDE settings
+.vscode/
+.idea/
+.gemini/
