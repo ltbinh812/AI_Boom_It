@@ -54,12 +54,14 @@ def _load_local(name: str, filepath):
     return mod
 
 _agent_mod = _load_local("_my_agent",  _HERE / "agent.py")
+_training_mod = _load_local("_my_training", _HERE / "training.py")
 _reward_mod = _load_local("_my_reward", _HERE / "reward.py")
 _utils_mod  = _load_local("_my_utils",  _HERE / "utils.py")
 
-TrainingAgent  = _agent_mod.TrainingAgent
-ReplayBuffer   = _agent_mod.ReplayBuffer
+TrainingAgent  = _training_mod.TrainingAgent
+ReplayBuffer   = _training_mod.ReplayBuffer
 encode_obs     = _agent_mod.encode_obs
+valid_action_mask = _agent_mod.valid_action_mask
 NUM_ACTIONS    = _agent_mod.NUM_ACTIONS
 MAP_CHANNELS   = _agent_mod.MAP_CHANNELS
 AUX_DIM        = _agent_mod.AUX_DIM
@@ -149,7 +151,8 @@ def _act_rule(agent, obs: dict) -> int:
 
 def _act_dqn(agent: TrainingAgent, obs: dict) -> int:
     ms, aux = encode_obs(obs, agent.agent_id)
-    return agent.act(ms, aux, epsilon=agent.epsilon)
+    mask = valid_action_mask(obs, agent.agent_id)
+    return agent.act(ms, aux, epsilon=agent.epsilon, action_mask=mask)
 
 
 # ── Main training loop ────────────────────────────────────────────────────────
@@ -171,7 +174,13 @@ def train(
     lr: float = 5e-4,
     buffer_capacity: int = 50_000,
     target_sync_every: int = 20,
+    soft_tau: float = 0.01,
+    n_step: int = 3,
     save_every: int = 500,
+    prioritized_replay: bool = True,
+    per_alpha: float = 0.6,
+    per_beta_start: float = 0.4,
+    per_beta_end: float = 1.0,
     device: str | None = None,
 ):
     if device is None:
@@ -206,7 +215,14 @@ def train(
     epsilon = learner.epsilon if load_model else epsilon_start
 
     # ── Replay Buffer ─────────────────────────────────────────────────────
-    buffer = ReplayBuffer(capacity=buffer_capacity, map_shape=map_shape, aux_dim=aux_dim)
+    buffer = ReplayBuffer(
+        capacity=buffer_capacity,
+        map_shape=map_shape,
+        aux_dim=aux_dim,
+        prioritized=prioritized_replay,
+        alpha=per_alpha,
+    )
+    nstep_queue = deque(maxlen=max(1, int(n_step)))
 
     # ── Output directory ──────────────────────────────────────────────────
     run_name = f"ckpts/{mode}_{enemy_type}_{num_episodes}ep_{seed}seed"
@@ -261,7 +277,8 @@ def train(
                 t0 = time.perf_counter()
 
                 # ── Collect actions from all 4 agents ─────────────────────
-                learner_action = learner.act(map_s, aux_s, epsilon=epsilon)
+                learner_mask = valid_action_mask(obs, learner.agent_id)
+                learner_action = learner.act(map_s, aux_s, epsilon=epsilon, action_mask=learner_mask)
                 actions = [learner_action]
                 for opp in opponents:
                     if is_rule_opp:
@@ -280,13 +297,44 @@ def train(
 
                 # ── Store transition ──────────────────────────────────────
                 next_map_s, next_aux_s = encode_obs(next_obs, agent_id=0)
-                buffer.push(map_s, aux_s, learner_action, r, next_map_s, next_aux_s, done)
+                nstep_queue.append((map_s, aux_s, learner_action, r, next_map_s, next_aux_s, done))
+
+                def _flush_nstep(force: bool = False):
+                    while nstep_queue and (force or len(nstep_queue) >= n_step):
+                        total_r = 0.0
+                        gamma_acc = 1.0
+                        end_idx = 0
+                        terminal = False
+                        for i, item in enumerate(nstep_queue):
+                            total_r += gamma_acc * float(item[3])
+                            end_idx = i
+                            if item[6]:
+                                terminal = True
+                                break
+                            if i + 1 >= n_step:
+                                break
+                            gamma_acc *= learner.gamma
+
+                        s0 = nstep_queue[0]
+                        sn = nstep_queue[end_idx]
+                        buffer.push(
+                            s0[0], s0[1], s0[2], total_r,
+                            sn[4], sn[5], terminal or sn[6],
+                        )
+                        nstep_queue.popleft()
+
+                _flush_nstep(force=False)
 
                 # ── Learn ─────────────────────────────────────────────────
                 if len(buffer) >= batch_size:
-                    batch = buffer.sample(batch_size)
-                    loss  = learner.train_step(batch)
+                    progress = ep / max(1, num_episodes - 1)
+                    beta = per_beta_start + (per_beta_end - per_beta_start) * progress
+                    batch, idx, is_w = buffer.sample(batch_size, beta=beta)
+                    loss, td_err = learner.train_step(batch, importance_weights=is_w)
+                    buffer.update_priorities(idx, td_err)
                     loss_history.append(loss)
+                    if soft_tau > 0.0:
+                        learner.sync_target(tau=soft_tau)
 
                 # ── Next step ─────────────────────────────────────────────
                 prev_obs = obs
@@ -298,6 +346,28 @@ def train(
 
                 if done:
                     break
+
+            # flush tail transitions for this episode
+            if nstep_queue:
+                while nstep_queue:
+                    total_r = 0.0
+                    gamma_acc = 1.0
+                    end_idx = 0
+                    terminal = False
+                    for i, item in enumerate(nstep_queue):
+                        total_r += gamma_acc * float(item[3])
+                        end_idx = i
+                        if item[6]:
+                            terminal = True
+                            break
+                        gamma_acc *= learner.gamma
+                    s0 = nstep_queue[0]
+                    sn = nstep_queue[end_idx]
+                    buffer.push(
+                        s0[0], s0[1], s0[2], total_r,
+                        sn[4], sn[5], terminal or sn[6],
+                    )
+                    nstep_queue.popleft()
 
             # ── Win tracking ──────────────────────────────────────────────
             final_players = np.asarray(obs["players"])
@@ -311,7 +381,7 @@ def train(
             eps_history.append(epsilon)
 
             # ── Target sync ───────────────────────────────────────────────
-            if (ep + 1) % target_sync_every == 0:
+            if soft_tau <= 0.0 and (ep + 1) % target_sync_every == 0:
                 learner.sync_target()
 
             # ── Periodic checkpoint ───────────────────────────────────────
@@ -408,7 +478,16 @@ if __name__ == "__main__":
     parser.add_argument("--epsilon_decay", type=float, default=0.9995)
     parser.add_argument("--target_sync",   type=int,   default=20,
                         help="Sync target network every N episodes")
+    parser.add_argument("--soft_tau",      type=float, default=0.01,
+                        help="Soft target update rate (<=0 disables soft updates)")
+    parser.add_argument("--n_step",        type=int,   default=3,
+                        help="N-step return horizon")
     parser.add_argument("--save_every",    type=int,   default=500)
+    parser.add_argument("--no_per",        action="store_true",
+                        help="Disable prioritized replay")
+    parser.add_argument("--per_alpha",     type=float, default=0.6)
+    parser.add_argument("--per_beta_start",type=float, default=0.4)
+    parser.add_argument("--per_beta_end",  type=float, default=1.0)
     args = parser.parse_args()
 
     train(
@@ -427,5 +506,11 @@ if __name__ == "__main__":
         epsilon_min     = args.epsilon_min,
         epsilon_decay   = args.epsilon_decay,
         target_sync_every = args.target_sync,
+        soft_tau       = args.soft_tau,
+        n_step         = args.n_step,
         save_every      = args.save_every,
+        prioritized_replay = not args.no_per,
+        per_alpha       = args.per_alpha,
+        per_beta_start  = args.per_beta_start,
+        per_beta_end    = args.per_beta_end,
     )

@@ -6,9 +6,10 @@ Canonical folder for development and submission. Baseline bots from the organize
 
 | File | Role |
 |------|------|
-| `agent.py` | `Agent` class for the game + training helpers |
+| `agent.py` | Submission inference entry (`Agent`) + observation encoder |
 | `model.py` | `BomberDQN` network (imported by `agent.py`) |
 | `model.pth` | Weights loaded at inference (keep this name) |
+| `training.py` | ReplayBuffer + Double DQN training agent |
 | `reward.py` | Reward shaping (training only) |
 | `train.py` | Training script |
 | `utils.py` | Checkpoints and plots (training only) |
@@ -29,4 +30,4 @@ From repo root:
 .\scripts\participant\build_submission_zip.ps1
 ```
 
-Upload `submission.zip`. Root must contain `agent.py` only (no parent folder, no `requirements.txt`).
+Upload `submission.zip`. Root must contain `agent.py`, `model.py`, `model.pth` (no parent folder, no `requirements.txt`).

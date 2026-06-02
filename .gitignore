@@ -4,6 +4,8 @@
 *.pyo
 *.pyd
 .Python
+.pytest_cache/
+.mypy_cache/
 
 # Training outputs (deployed weights live in my_agent/model.pth)
 my_agent/ckpts/
@@ -11,6 +13,9 @@ my_agent/ckpts/
 my_agent/best_model.pth
 my_agent/final_*.pth
 **/*.png
+runs/
+wandb/
+events.out.tfevents*
 
 # Local evaluation / organizer artifacts
 competition.db
