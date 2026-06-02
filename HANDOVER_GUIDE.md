@@ -363,6 +363,43 @@ Sau khi script train kết thúc, các file trọng số sẽ được lưu tron
 
 ---
 
+### ☁️ 6.4. Hướng dẫn Train Baseline DQN (Từ Thư Mục Tham Khảo Của BTC) trên Kaggle
+
+*(Được trích xuất từ `agent/README.md` để dùng làm tài liệu tra cứu sau này)*
+
+Nếu bạn muốn huấn luyện lại bộ não **DQN Baseline** mặc định do Ban Tổ Chức cung cấp (nằm trong thư mục `agent/dqn_agent/`), hãy làm theo các bước sau trên Kaggle:
+
+1. Lấy mã **GitHub Access Token** tại: `github.com > Settings > Developer settings > Personal Access Tokens > Generate new token > Chọn quyền (allow read repo) > Copy the key`.
+2. Tạo Notebook mới trên Kaggle, vào `Settings > Secrets > Nhấn Add Secret`.
+   * **Key:** Đặt tên bất kỳ, ví dụ `"dqn"`.
+   * **Value:** Dán đoạn mã token vừa copy ở bước 1 vào đây.
+3. Dán và chạy lần lượt 4 khối code (cells) sau trên Kaggle:
+
+```python
+# Cell 1: Đọc token bảo mật đã lưu ở Bước 2
+from kaggle_secrets import UserSecretsClient
+user_secrets = UserSecretsClient()
+secret_value_0 = user_secrets.get_secret("dqn") 
+```
+
+```bash
+# Cell 2: Tải code từ repo giải đấu về (nhớ đổi "your github username here" thành username của bạn)
+!git clone https://{your github username here}:{secret_value_0}@github.com/VLTisME/Bomberland-GDGoC-AI-Challenge.git
+```
+
+```bash
+# Cell 3: Chuyển hướng thư mục làm việc và kiểm tra
+%cd /kaggle/working/Bomberland-GDGoC-AI-Challenge
+%ls
+```
+
+```bash
+# Cell 4: Chạy huấn luyện Baseline Agent (10.000 trận đấu với Tactical Bot)
+!python /kaggle/working/Bomberland-GDGoC-AI-Challenge/agent/dqn_agent/agent.py --enemy_type tactical --num_episodes 10000 --save_model
+```
+
+---
+
 ## 🎛️ 7. Bảng Tham Số Điều Chỉnh (Hyperparameters)
 
 | Tham số | Mặc định | Ý nghĩa |

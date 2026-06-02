@@ -187,7 +187,10 @@ def train(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if device == "cpu":
-        torch.set_num_threads(2)
+        import multiprocessing
+        cores = multiprocessing.cpu_count()
+        # Allocate ALL logical cores to maximize PyTorch CPU usage
+        torch.set_num_threads(cores)
 
     seed_everything(seed)
     print(f"[train] mode={mode}  enemy={enemy_type}  episodes={num_episodes}  device={device}")

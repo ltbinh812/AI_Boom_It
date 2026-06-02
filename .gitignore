@@ -47,3 +47,13 @@ service_account*.json
 .gemini/
 *.swp
 *~
+
+# --- EXPLICITLY IGNORED FOR KAGGLE ---
+# Những mục không cần thiết để đưa lên Kaggle
+my_agent/
+competition/
+submission/
+Bomberland-GDGoC-AI-Challenge/
+introduction_AI.pdf
+check_hw.py
+HANDOVER_GUIDE.md
