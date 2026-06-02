@@ -247,17 +247,8 @@ py -3.13 -m scripts.participant.estimate_rankings `
 1. Đảm bảo file trọng số tốt nhất `best_model.pth` của bạn đã tồn tại trong thư mục `my_agent/` sau khi kết thúc huấn luyện.
 2. Tiến hành nén zip **phẳng** (flat zip - không chứa thư mục cha) các file cấu thành của bạn bằng cách chạy lệnh sau trên PowerShell:
     ```powershell
-    # Bước 2.1: Tạo một thư mục tạm thời và copy các file nộp bài vào đó
-    New-Item -ItemType Directory -Path temp_submission -Force
-    Copy-Item -Path my_agent\agent.py, my_agent\model.py, requirements.txt -Destination temp_submission -Force
-    # Copy và đổi tên file trọng số của bạn thành model.pth đúng format nộp bài
-    Copy-Item -Path my_agent\best_model.pth -Destination temp_submission\model.pth -Force
-
-    # Bước 2.2: Nén phẳng tất cả các file trong thư mục tạm thời thành submission.zip
-    Compress-Archive -Path temp_submission\* -DestinationPath submission.zip -Force
-
-    # Bước 2.3: Xóa thư mục tạm thời sau khi nén xong
-    Remove-Item -Path temp_submission -Recurse -Force
+    # Tạo submission.zip phẳng (agent.py ở root zip, không có requirements.txt)
+    .\scripts\participant\build_submission_zip.ps1
     ```
 
     > [!WARNING]
@@ -269,7 +260,6 @@ py -3.13 -m scripts.participant.estimate_rankings `
     > submission.zip
     > ├── agent.py
     > ├── model.py
-    > ├── requirements.txt
     > └── model.pth
     > ```
 
@@ -283,7 +273,7 @@ py -3.13 -m scripts.participant.estimate_rankings `
 | :--- | :--- | :--- | :--- |
 | `torch.set_num_threads(1)` | **`1`** | Giới hạn PyTorch chỉ sử dụng 1 CPU thread | **Cực kỳ quan trọng!** Server của BTC giới hạn rất nghiêm ngặt về tài nguyên CPU. Nếu sử dụng nhiều luồng, CPU sẽ bị tranh chấp tài nguyên dẫn đến bị Timeout (>100ms) và bị xử thua trực tiếp. |
 | `self.device` | **`torch.device("cpu")`** | Chạy suy luận (inference) trên CPU | Server của BTC đánh giá bài làm trên môi trường CPU, không hỗ trợ GPU CUDA. Phải đảm bảo toàn bộ tensor và model đều chạy trên CPU. |
-| Tên file trọng số | **`best_model.pth`** | Tên file mô hình được load tự động | Hệ thống của BTC sẽ giải nén file zip và gọi trực tiếp `agent.py`. Bạn phải đổi tên checkpoint tốt nhất của mình thành `best_model.pth` và đặt cùng thư mục để agent load được. |
+| Tên file trọng số | **`model.pth`** (trong zip) | Tên file mô hình được load tự động | `Agent` trong `my_agent/agent.py` load `model.pth` cùng thư mục. Khi nộp, copy vào zip với tên `model.pth` (dùng `build_submission_zip.ps1`). |
 | `dueling=True` | **`True`** | Bật kiến trúc Dueling DQN trong `BomberDQN` | Phải đồng bộ với kiến trúc mạng nơ-ron mà bạn đã cấu hình lúc train. Nếu lúc train dùng Dueling nhưng lúc nộp tắt đi (hoặc ngược lại) sẽ gây lỗi lệch số lượng tham số và agent bị crash. |
 
 ### 💡 6.2. Các Kỹ Thuật & Cấu Hình Để Agent Đạt Sức Mạnh Tối Đa Khi Nộp

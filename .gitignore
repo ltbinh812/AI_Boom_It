@@ -3,16 +3,29 @@
 *.pyc
 *.pyo
 *.pyd
+.Python
 
-# Checkpoints and models (except the one in my_agent)
-ckpts/
+# Training outputs (deployed weights live in my_agent/model.pth)
+my_agent/ckpts/
+**/ckpts/
+my_agent/best_model.pth
+my_agent/final_*.pth
+**/*.png
 
-# Temporary and submission files
-submission/
+# Local evaluation / organizer artifacts
+competition.db
+logs/
+submissions/
+.evaluation.lock
+
+# Built submission package (flat zip for upload)
 submission.zip
 temp_submission/
 test_unzip/
 test_verify/
+
+# Competition plan / large local docs (not part of repo)
+*.pdf
 
 # Environments and credentials
 .env
@@ -20,9 +33,12 @@ venv/
 .venv/
 ENV/
 secrets/
-*.json
+*credentials*.json
+service_account*.json
 
-# IDE settings
+# IDE and editor
 .vscode/
 .idea/
 .gemini/
+*.swp
+*~

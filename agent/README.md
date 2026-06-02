@@ -2,6 +2,8 @@
 
 This guide explains how to build, test, and submit your Bomberland AI agent.
 
+> **This repo:** Your team agent lives in [`../my_agent/`](../my_agent/). The `agent/` folder here holds organizer baselines only (`tactical_rule_agent.py`, `dqn_agent/`, etc.) — do not submit those files.
+
 ## 🤖 Baseline Agents
 You can find several baseline agents in this directory to use as a starting point:
 *   `random_agent.py`: Simple random actions.
