@@ -23,17 +23,18 @@ MAX_BOMB_RADIUS = 5
 
 # ── Reward table (tweak to shape behaviour) ──────────────────────────────────
 REWARDS = {
-    "win":              3.0,   # Last agent standing
-    "enemy_death":      1.0,   # Per kill
-    "agent_death":     -5.0,   # Self-elimination (increased penalty for safety)
-    "time_penalty":    -0.005, # Every step to encourage speed
+    "win":              5.0,   # Last agent standing
+    "enemy_death":      3.0,   # Per kill (increased for hunting)
+    "agent_death":     -2.5,   # Self-elimination
+    "time_penalty":    -0.002, # Every step to encourage speed
     "standing_still":  -0.01,  # Penalise camping
-    "plant_near_box":   0.15,  # Place bomb adjacent to a box (increased reward)
-    "item_collection":  0.25,  # Pick up an item (increased reward)
-    "danger_evasion":   0.20,  # Step out of blast zone (increased reward)
+    "plant_near_box":   0.15,  # Place bomb adjacent to a box
+    "plant_near_enemy": 0.50,  # Place bomb near enemy (NEW - aggressive hunting)
+    "item_collection":  0.25,  # Pick up an item
+    "danger_evasion":   0.20,  # Step out of blast zone
     "danger_enter":    -0.06,  # Step into blast zone (when moving)
     "own_blast_loiter": -0.04, # Remain in own blast zone per tick urgency
-    "approach_enemy":   0.02,  # Per unit of Manhattan distance closed
+    "approach_enemy":   0.05,  # Per unit of Manhattan distance closed (increased for hunting)
 }
 
 
@@ -133,6 +134,8 @@ def compute_reward(prev_obs: dict | None, curr_obs: dict, agent_id: int) -> floa
     # ── 1. Death / win ────────────────────────────────────────────────────
     if prev_alive == 1 and curr_alive == 0:
         return float(REWARDS["agent_death"])
+    if curr_alive == 0:
+        return 0.0
 
     reward = 0.0
 
@@ -191,7 +194,7 @@ def compute_reward(prev_obs: dict | None, curr_obs: dict, agent_id: int) -> floa
         if int(curr_p[agent_id][4]) > int(prev_p[agent_id][4]):
             reward += REWARDS["item_collection"]
 
-    # ── 6. Bomb placed near box (encourages strategic bombing) ────────────
+    # ── 6. Bomb placed near box or enemy (strategic bombing) ──────────────
     prev_bombs_left = int(prev_p[agent_id][3])
     curr_bombs_left = int(curr_p[agent_id][3])
     if curr_bombs_left < prev_bombs_left:
@@ -205,5 +208,9 @@ def compute_reward(prev_obs: dict | None, curr_obs: dict, agent_id: int) -> floa
         ]
         if BOX in [int(v) for v in adjacent]:
             reward += REWARDS["plant_near_box"]
+            
+        curr_d = _nearest_enemy_dist(curr_p, agent_id, cx, cy)
+        if curr_d is not None and curr_d <= 2:
+            reward += REWARDS["plant_near_enemy"]
 
     return float(reward)

@@ -172,16 +172,18 @@ class TrainingAgent:
         map_state: np.ndarray,
         aux_state: np.ndarray,
         action_mask: np.ndarray | None = None,
-    ) -> int:
+        epsilon: float = 0.0,
+    ) -> tuple[int, bool]:
         valid = np.flatnonzero(action_mask) if action_mask is not None else np.arange(self.num_actions)
         if valid.size == 0:
-            return 0
+            return 0, False
+
+        if epsilon > 0.0 and np.random.rand() < epsilon:
+            return int(np.random.choice(valid)), True
 
         mt = torch.from_numpy(map_state).unsqueeze(0).to(self.device)
         at = torch.from_numpy(aux_state).unsqueeze(0).to(self.device)
-        # Switch to eval so NoisyNet uses weight_mu only (deterministic action selection).
-        # This mirrors what the submission Agent class does via q_net.eval().
-        self.q_net.eval()
+        # Keep q_net in train() mode during experience collection so NoisyNet injects exploration noise.
         with torch.no_grad():
             logits = self.q_net(mt, at).squeeze(0) # (A, N)
             probs = F.softmax(logits, dim=1)
@@ -192,9 +194,7 @@ class TrainingAgent:
                 q = q.copy()
                 q[~action_mask] = -1e9
             action = int(np.argmax(q))
-        # Switch back to train mode for subsequent learning steps.
-        self.q_net.train()
-        return action
+        return action, False
 
     def train_step(self, batch, importance_weights: np.ndarray | None = None) -> tuple[float, np.ndarray]:
         # Ensure online net is in train mode for NoisyNet gradient flow.

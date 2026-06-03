@@ -155,16 +155,19 @@ def train(
     n_atoms: int = 51,
     # Training Hyperparameters
     batch_size: int = 128,
-    lr: float = 5e-4,
+    lr: float = 1e-4,
     buffer_capacity: int = 50_000,
     target_sync_every: int = 20,
-    soft_tau: float = 0.01,
+    soft_tau: float = 0.005,
     n_step: int = 3,
     save_every: int = 500,
     prioritized_replay: bool = True,
     per_alpha: float = 0.6,
     per_beta_start: float = 0.4,
     per_beta_end: float = 1.0,
+    eps_start: float = 0.1,
+    eps_end: float = 0.01,
+    eps_decay: int = 2000,
     device: str | None = None,
 ):
     if device is None:
@@ -221,6 +224,7 @@ def train(
     loss_history    = []
     reward_history  = []
     win_history     = []
+    eps_history     = []
     step_times      = deque(maxlen=200)
 
     # ── Training episodes ─────────────────────────────────────────────────
@@ -230,6 +234,12 @@ def train(
     with tqdm(total=num_episodes, desc="Training", unit="ep") as pbar:
         for ep in range(num_episodes):
             ep_seed = seed + ep
+
+            # Calculate epsilon for this episode (fallback exploration)
+            eps = eps_end + (eps_start - eps_end) * math.exp(-1. * ep / max(1, eps_decay))
+            eps_history.append(eps)
+            random_action_count = 0
+            total_actions_count = 0
 
             # Decide opponent composition for this episode
             if mode == "rule":
@@ -267,7 +277,13 @@ def train(
 
                 # ── Collect actions from all 4 agents ─────────────────────
                 learner_mask = valid_action_mask(obs, learner.agent_id)
-                learner_action = learner.act(map_s, aux_s, action_mask=learner_mask)
+                learner_action, is_random = learner.act(map_s, aux_s, action_mask=learner_mask, epsilon=eps)
+                
+                if int(obs["players"][0][2]) == 1:
+                    total_actions_count += 1
+                    if is_random:
+                        random_action_count += 1
+
                 actions = [learner_action]
                 for opp in opponents:
                     if is_rule_opp:
@@ -287,7 +303,10 @@ def train(
                 # ── Store transition ──────────────────────────────────────
                 next_map_s, next_aux_s = encode_obs(next_obs, agent_id=0)
                 next_mask = valid_action_mask(next_obs, learner.agent_id)
-                nstep_queue.append((map_s, aux_s, learner_action, r, next_map_s, next_aux_s, done, next_mask))
+                
+                learner_alive_prev = int(obs["players"][0][2]) == 1
+                learner_alive_next = int(next_obs["players"][0][2]) == 1
+                personal_done = done or (learner_alive_prev and not learner_alive_next)
 
                 def _flush_nstep(force: bool = False):
                     while nstep_queue and (force or len(nstep_queue) >= n_step):
@@ -313,7 +332,11 @@ def train(
                         )
                         nstep_queue.popleft()
 
-                _flush_nstep(force=False)
+                if learner_alive_prev:
+                    nstep_queue.append((map_s, aux_s, learner_action, r, next_map_s, next_aux_s, personal_done, next_mask))
+                    _flush_nstep(force=False)
+                    if personal_done:
+                        _flush_nstep(force=True)
 
                 # ── Learn ─────────────────────────────────────────────────
                 if len(buffer) >= batch_size:
@@ -404,6 +427,13 @@ def train(
 
             # ── Progress bar ──────────────────────────────────────────────
             avg_ms = np.mean(step_times) if step_times else 0.0
+            if (ep + 1) % 10 == 0 or (ep == num_episodes - 1):
+                avg_r = np.mean(reward_history[-10:])
+                wr100 = np.mean(win_history[-100:]) if len(win_history) > 0 else 0.0
+                rand_pct = (random_action_count / max(1, total_actions_count)) * 100
+                print(f"[Ep {ep+1:5d}] R: {avg_r:6.2f} | Win: {win_history[-1]} "
+                      f"| WR(100): {wr100*100:5.1f}% | Rand: {random_action_count}/{total_actions_count} ({rand_pct:.1f}%) "
+                      f"| Eps: {eps:.3f} | Buf: {len(buffer)}")
             pbar.set_postfix(
                 reward   = f"{ep_reward:.2f}",
                 win_rate = f"{np.mean(win_history[-100:]) if win_history else 0:.2%}",
@@ -434,7 +464,8 @@ def train(
     # ── Plot training curves ──────────────────────────────────────────────
     plot_loss(loss_history,   save_path=f"{run_name}/loss.png")
     plot_rewards(reward_history, save_path=f"{run_name}/rewards.png")
-    plot_win_rates(win_history,  save_path=f"{run_name}/win_rate.png")
+    plot_win_rates(win_history, save_path=f"{run_name}/win_rates.png")
+    plot_epsilon(eps_history, save_path=f"{run_name}/epsilon.png")
 
     print(f"\n[train] Done. Best win rate (last-100 MA): {best_win_rate:.2%}")
     print(f"[train] Avg inference time: {np.mean(step_times):.2f} ms/step")
@@ -459,7 +490,7 @@ if __name__ == "__main__":
                         help="Path to a .pth checkpoint to continue training")
     parser.add_argument("--no_dueling",    action="store_true",
                         help="Disable Dueling DQN (use standard head instead)")
-    parser.add_argument("--lr",            type=float, default=5e-4)
+    parser.add_argument("--lr",            type=float, default=1e-4)
     parser.add_argument("--batch_size",    type=int,   default=128)
     parser.add_argument("--buffer",        type=int,   default=50_000)
     
@@ -470,16 +501,23 @@ if __name__ == "__main__":
 
     parser.add_argument("--target_sync",   type=int,   default=20,
                         help="Sync target network every N episodes")
-    parser.add_argument("--soft_tau",      type=float, default=0.01,
+    parser.add_argument("--soft_tau",      type=float, default=0.005,
                         help="Soft target update rate (<=0 disables soft updates)")
     parser.add_argument("--n_step",        type=int,   default=3,
                         help="N-step return horizon")
     parser.add_argument("--save_every",    type=int,   default=500)
-    parser.add_argument("--no_per",        action="store_true",
-                        help="Disable prioritized replay")
+    parser.add_argument("--prioritized_replay", action="store_true", default=True)
     parser.add_argument("--per_alpha",     type=float, default=0.6)
     parser.add_argument("--per_beta_start",type=float, default=0.4)
     parser.add_argument("--per_beta_end",  type=float, default=1.0)
+    
+    parser.add_argument("--eps_start",     type=float, default=0.1,
+                        help="Starting epsilon for fallback exploration")
+    parser.add_argument("--eps_end",       type=float, default=0.01,
+                        help="Ending epsilon for fallback exploration")
+    parser.add_argument("--eps_decay",     type=int,   default=2000,
+                        help="Number of episodes over which to decay epsilon")
+
     args = parser.parse_args()
 
     train(
@@ -501,8 +539,11 @@ if __name__ == "__main__":
         soft_tau       = args.soft_tau,
         n_step         = args.n_step,
         save_every      = args.save_every,
-        prioritized_replay = not args.no_per,
+        prioritized_replay = args.prioritized_replay,
         per_alpha       = args.per_alpha,
         per_beta_start  = args.per_beta_start,
         per_beta_end    = args.per_beta_end,
+        eps_start       = args.eps_start,
+        eps_end         = args.eps_end,
+        eps_decay       = args.eps_decay,
     )
