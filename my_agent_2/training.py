@@ -45,12 +45,13 @@ class ReplayBuffer:
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=np.float32)
+        self.masks_ns = np.zeros((capacity, NUM_ACTIONS), dtype=bool)
         self.priorities = np.ones(capacity, dtype=np.float32)
 
     def __len__(self) -> int:
         return self.size
 
-    def push(self, map_s, aux_s, action, reward, map_ns, aux_ns, done):
+    def push(self, map_s, aux_s, action, reward, map_ns, aux_ns, done, mask_ns):
         i = self.pos
         self.map_s[i] = map_s
         self.aux_s[i] = aux_s
@@ -59,6 +60,7 @@ class ReplayBuffer:
         self.actions[i] = action
         self.rewards[i] = reward
         self.dones[i] = float(done)
+        self.masks_ns[i] = mask_ns
         max_p = float(self.priorities[: self.size].max()) if self.size > 0 else 1.0
         self.priorities[i] = max(max_p, 1.0)
         self.pos = (i + 1) % self.capacity
@@ -89,6 +91,7 @@ class ReplayBuffer:
             self.actions[idx],
             self.rewards[idx],
             self.dones[idx],
+            self.masks_ns[idx],
         )
         return batch, idx, weights
 
@@ -114,6 +117,7 @@ class TrainingAgent:
         v_min: float = -20.0,
         v_max: float = 20.0,
         n_atoms: int = 51,
+        n_step: int = 3,
         pretrained_path: str | None = None,
     ):
         self.agent_id = agent_id
@@ -121,6 +125,7 @@ class TrainingAgent:
         self.aux_dim = int(aux_dim)
         self.num_actions = num_actions
         self.gamma = gamma
+        self.n_step = n_step
         self.device = device
         
         # Distributional RL parameters
@@ -174,19 +179,27 @@ class TrainingAgent:
 
         mt = torch.from_numpy(map_state).unsqueeze(0).to(self.device)
         at = torch.from_numpy(aux_state).unsqueeze(0).to(self.device)
+        # Switch to eval so NoisyNet uses weight_mu only (deterministic action selection).
+        # This mirrors what the submission Agent class does via q_net.eval().
+        self.q_net.eval()
         with torch.no_grad():
             logits = self.q_net(mt, at).squeeze(0) # (A, N)
             probs = F.softmax(logits, dim=1)
             # Q-value is the expected value of the distribution
             q = (probs * self.support).sum(dim=1).cpu().numpy() # (A,)
-            
+
             if action_mask is not None:
                 q = q.copy()
                 q[~action_mask] = -1e9
-            return int(np.argmax(q))
+            action = int(np.argmax(q))
+        # Switch back to train mode for subsequent learning steps.
+        self.q_net.train()
+        return action
 
     def train_step(self, batch, importance_weights: np.ndarray | None = None) -> tuple[float, np.ndarray]:
-        ms, as_, nms, nas, act, rew, don = batch
+        # Ensure online net is in train mode for NoisyNet gradient flow.
+        self.q_net.train()
+        ms, as_, nms, nas, act, rew, don, mask_ns = batch
         dev = self.device
 
         ms_t = torch.from_numpy(ms).to(dev)
@@ -196,6 +209,7 @@ class TrainingAgent:
         act_t = torch.from_numpy(act).to(dev)
         rew_t = torch.from_numpy(rew).to(dev)
         don_t = torch.from_numpy(don).to(dev)
+        mask_ns_t = torch.from_numpy(mask_ns).to(dev)
 
         batch_size = ms_t.size(0)
 
@@ -213,13 +227,14 @@ class TrainingAgent:
             next_logits = self.q_net(nms_t, nas_t)
             next_probs = F.softmax(next_logits, dim=2)
             next_q = (next_probs * self.support).sum(dim=2)  # (B, A)
+            next_q[~mask_ns_t] = -1e9
             best_next_a = next_q.argmax(dim=1)  # (B,)
 
             # Get target distribution for the best next action
             next_target_probs = target_probs[range(batch_size), best_next_a]  # (B, N)
 
             # Compute projected distribution
-            Tz = rew_t.unsqueeze(1) + (1.0 - don_t.unsqueeze(1)) * self.gamma * self.support.unsqueeze(0)  # (B, N)
+            Tz = rew_t.unsqueeze(1) + (1.0 - don_t.unsqueeze(1)) * (self.gamma ** self.n_step) * self.support.unsqueeze(0)  # (B, N)
             Tz = Tz.clamp(self.v_min, self.v_max)
             b = (Tz - self.v_min) / self.delta_z
             l = b.floor().long()
@@ -251,8 +266,9 @@ class TrainingAgent:
         loss.backward()
         nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=10.0)
         self.optimizer.step()
-        
-        # Reset Noisy Networks
+
+        # Reset noise for the NEXT forward pass (exploration diversity).
+        # q_net is still in train() mode; target_net stays in eval().
         self.q_net.reset_noise()
         self.target_net.reset_noise()
         

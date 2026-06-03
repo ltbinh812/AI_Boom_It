@@ -119,7 +119,7 @@ def _make_opponents_selfplay(
             device      = device,
             dueling     = True,
             pretrained_path = pretrained_path,
-            v_min=v_min, v_max=v_max, n_atoms=n_atoms
+            v_min=v_min, v_max=v_max, n_atoms=n_atoms, n_step=3
         )
         agents.append(a)
     return agents
@@ -199,6 +199,7 @@ def train(
         v_min           = v_min,
         v_max           = v_max,
         n_atoms         = n_atoms,
+        n_step          = n_step,
         pretrained_path = load_model,
     )
 
@@ -247,7 +248,7 @@ def train(
                         else load_model
                     ),
                     device = device,
-                    v_min=v_min, v_max=v_max, n_atoms=n_atoms
+                    v_min=v_min, v_max=v_max, n_atoms=n_atoms, n_step=n_step
                 )
                 is_rule_opp = False
             else:
@@ -285,7 +286,8 @@ def train(
 
                 # ── Store transition ──────────────────────────────────────
                 next_map_s, next_aux_s = encode_obs(next_obs, agent_id=0)
-                nstep_queue.append((map_s, aux_s, learner_action, r, next_map_s, next_aux_s, done))
+                next_mask = valid_action_mask(next_obs, learner.agent_id)
+                nstep_queue.append((map_s, aux_s, learner_action, r, next_map_s, next_aux_s, done, next_mask))
 
                 def _flush_nstep(force: bool = False):
                     while nstep_queue and (force or len(nstep_queue) >= n_step):
@@ -307,7 +309,7 @@ def train(
                         sn = nstep_queue[end_idx]
                         buffer.push(
                             s0[0], s0[1], s0[2], total_r,
-                            sn[4], sn[5], terminal or sn[6],
+                            sn[4], sn[5], terminal or sn[6], sn[7]
                         )
                         nstep_queue.popleft()
 
@@ -353,7 +355,7 @@ def train(
                     sn = nstep_queue[end_idx]
                     buffer.push(
                         s0[0], s0[1], s0[2], total_r,
-                        sn[4], sn[5], terminal or sn[6],
+                        sn[4], sn[5], terminal or sn[6], sn[7]
                     )
                     nstep_queue.popleft()
 
